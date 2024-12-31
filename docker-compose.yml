@@ -1,7 +1,7 @@
-version: '3'
-
+version: '3.9'
 
 services:
+
   orders-db:
     container_name: orders_database
     image: postgres:16.2
@@ -9,8 +9,8 @@ services:
     volumes:
       - ./postgres:/var/lib/postgresql/data
     ports:
-      - 5432:5432
+      - 5433:5432
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=123456
-      - POSTGRES_DB=ordersdb
+      POSTGRES_DB: ordersdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123456

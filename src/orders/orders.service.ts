@@ -1,12 +1,26 @@
-import { HttpStatus, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  HttpStatus,
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { PrismaClient } from '@prisma/client';
-import { RpcException } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { ChangeOrderStatusDto, OrderPaginationDto } from './dto';
+import { PRODUCT_SERVICE } from 'src/config';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class OrdersService extends PrismaClient implements OnModuleInit {
   readonly #logger = new Logger(OrdersService.name);
+
+  constructor(
+    @Inject(PRODUCT_SERVICE) private readonly productService: ClientProxy,
+  ) {
+    super();
+  }
 
   async onModuleInit() {
     await this.$connect();
@@ -14,10 +28,66 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
   }
 
   async create(createOrderDto: CreateOrderDto) {
-    const order = await this.order.create({
-      data: createOrderDto,
-    });
-    return order;
+    try {
+      // Validate product ids
+      const productIds = createOrderDto.items.map((item) => item.productId);
+      const products: { price: number; id: number; name: string }[] =
+        await firstValueFrom(
+          this.productService.send({ cmd: 'validate_products' }, productIds),
+        );
+
+      // Calculate values
+      const totalItems = createOrderDto.items.reduce((acc, item) => {
+        return acc + item.quantity;
+      }, 0);
+      const totalAmount = createOrderDto.items.reduce((acc, item) => {
+        const price = products.find(
+          (product) => product.id === item.productId,
+        )?.price;
+
+        return acc + price * item.quantity;
+      }, 0);
+
+      // Create order
+      const order = await this.order.create({
+        data: {
+          totalAmount,
+          totalItems,
+          OrderItem: {
+            createMany: {
+              data: createOrderDto.items.map((item) => ({
+                price: products.find((product) => product.id === item.productId)
+                  .price,
+                quantity: item.quantity,
+                productId: item.productId,
+              })),
+            },
+          },
+        },
+        include: {
+          OrderItem: {
+            select: {
+              price: true,
+              productId: true,
+              quantity: true,
+            },
+          },
+        },
+      });
+
+      return {
+        ...order,
+        OrderItem: order.OrderItem.map((item) => ({
+          ...item,
+          name: products.find((product) => product.id === item.productId)?.name,
+        })),
+      };
+    } catch (error) {
+      throw new RpcException({
+        status: HttpStatus.BAD_REQUEST,
+        message: error.message,
+      });
+    }
   }
 
   async findAll(paginationDto: OrderPaginationDto) {
@@ -50,6 +120,15 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
       where: {
         id,
       },
+      include: {
+        OrderItem: {
+          select: {
+            price: true,
+            productId: true,
+            quantity: true,
+          },
+        },
+      },
     });
 
     if (!order) {
@@ -59,7 +138,19 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
       });
     }
 
-    return order;
+    const productIds = order.OrderItem.map((item) => item.productId);
+    const products: { price: number; id: number; name: string }[] =
+      await firstValueFrom(
+        this.productService.send({ cmd: 'validate_products' }, productIds),
+      );
+
+    return {
+      ...order,
+      OrderItem: order.OrderItem.map((item) => ({
+        ...item,
+        name: products.find((product) => product.id === item.productId)?.name,
+      })),
+    };
   }
 
   async changeOrderStatus(changeOrderStatusDto: ChangeOrderStatusDto) {

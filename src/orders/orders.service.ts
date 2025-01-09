@@ -9,16 +9,14 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { PrismaClient } from '@prisma/client';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { ChangeOrderStatusDto, OrderPaginationDto } from './dto';
-import { PRODUCT_SERVICE } from 'src/config';
 import { firstValueFrom } from 'rxjs';
+import { NATS_SERVICE } from 'src/config';
 
 @Injectable()
 export class OrdersService extends PrismaClient implements OnModuleInit {
   readonly #logger = new Logger(OrdersService.name);
 
-  constructor(
-    @Inject(PRODUCT_SERVICE) private readonly productService: ClientProxy,
-  ) {
+  constructor(@Inject(NATS_SERVICE) private readonly client: ClientProxy) {
     super();
   }
 
@@ -32,9 +30,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
       // Validate product ids
       const productIds = createOrderDto.items.map((item) => item.productId);
       const products: { price: number; id: number; name: string }[] =
-        await firstValueFrom(
-          this.productService.send({ cmd: 'validate_products' }, productIds),
-        );
+        await firstValueFrom(this.client.send('validate_products', productIds));
 
       // Calculate values
       const totalItems = createOrderDto.items.reduce((acc, item) => {
@@ -140,9 +136,7 @@ export class OrdersService extends PrismaClient implements OnModuleInit {
 
     const productIds = order.OrderItem.map((item) => item.productId);
     const products: { price: number; id: number; name: string }[] =
-      await firstValueFrom(
-        this.productService.send({ cmd: 'validate_products' }, productIds),
-      );
+      await firstValueFrom(this.client.send('validate_products', productIds));
 
     return {
       ...order,
